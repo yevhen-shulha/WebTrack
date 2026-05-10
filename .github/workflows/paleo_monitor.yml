@@ -1,13 +1,22 @@
-name: Paleo Thursday Ticket Monitor
+name: Paleo Festival Ticket Monitor
 
 on:
   schedule:
-    - cron: '23 */2 * * *'  # кожні 2 год (о :23 хв — менше навантаження на GitHub)
+    - cron: '0 7-18 * * *'   # щогодини з 09:00 до 20:00 (UTC+2 = UTC 07–18)
   workflow_dispatch:           # кнопка ручного запуску
 
 jobs:
   check-tickets:
     runs-on: ubuntu-latest
+
+    env:
+      TZ: Europe/Zurich
+      CHECK_INTERVAL: "0"           # один запуск і вихід
+      ACTIVE_HOURS_ENABLED: "false" # години контролює cron, не скрипт
+      TELEGRAM_ENABLED:    ${{ secrets.TELEGRAM_ENABLED }}
+      TELEGRAM_TOKEN:      ${{ secrets.TELEGRAM_TOKEN }}
+      TELEGRAM_CHAT_ID:    ${{ secrets.TELEGRAM_CHAT_ID }}
+
     steps:
       - uses: actions/checkout@v4
 
@@ -20,14 +29,5 @@ jobs:
           pip install playwright httpx
           playwright install chromium --with-deps
 
-      - name: Run monitor (once)
-        env:
-          EMAIL_ENABLED:    ${{ secrets.EMAIL_ENABLED }}
-          SMTP_USER:        ${{ secrets.SMTP_USER }}
-          SMTP_PASSWORD:    ${{ secrets.SMTP_PASSWORD }}
-          EMAIL_TO:         ${{ secrets.EMAIL_TO }}
-          TELEGRAM_ENABLED: ${{ secrets.TELEGRAM_ENABLED }}
-          TELEGRAM_TOKEN:   ${{ secrets.TELEGRAM_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          CHECK_INTERVAL:   "0"   # запуск один раз і вихід
+      - name: Run monitor
         run: python paleo_monitor.py
