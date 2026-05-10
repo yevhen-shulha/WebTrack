@@ -1,0 +1,33 @@
+name: Paleo Thursday Ticket Monitor
+
+on:
+  schedule:
+    - cron: '23 */2 * * *'  # кожні 2 год (о :23 хв — менше навантаження на GitHub)
+  workflow_dispatch:           # кнопка ручного запуску
+
+jobs:
+  check-tickets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install playwright httpx
+          playwright install chromium --with-deps
+
+      - name: Run monitor (once)
+        env:
+          EMAIL_ENABLED:    ${{ secrets.EMAIL_ENABLED }}
+          SMTP_USER:        ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD:    ${{ secrets.SMTP_PASSWORD }}
+          EMAIL_TO:         ${{ secrets.EMAIL_TO }}
+          TELEGRAM_ENABLED: ${{ secrets.TELEGRAM_ENABLED }}
+          TELEGRAM_TOKEN:   ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          CHECK_INTERVAL:   "0"   # запуск один раз і вихід
+        run: python paleo_monitor.py
