@@ -2,7 +2,7 @@ name: Paleo Festival Ticket Monitor
 
 on:
   schedule:
-    - cron: '*/5 * * * *' # '0 6-18 * * *'   # щогодини 08:00–20:00 за Цюрихом (UTC+2 влітку)
+    - cron: '*/30 * * * *' # '0 6-18 * * *'   # щогодини 08:00–20:00 за Цюрихом (UTC+2 влітку)
   workflow_dispatch:           # кнопка ручного запуску
 
 jobs:
