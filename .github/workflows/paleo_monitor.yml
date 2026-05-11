@@ -2,27 +2,34 @@ name: Paleo Festival Ticket Monitor
 
 on:
   schedule:
-    - cron: '0 5-19 * * *'
-  workflow_dispatch:
-  
+    - cron: '0 6-18 * * *'   # щогодини 08:00–20:00 за Цюрихом (UTC+2 влітку)
+  workflow_dispatch:           # кнопка ручного запуску
+
 jobs:
   check-tickets:
     runs-on: ubuntu-latest
 
     env:
       TZ: Europe/Zurich
-      CHECK_INTERVAL: "0"           # один запуск і вихід
-      ACTIVE_HOURS_ENABLED: "false" # години контролює cron, не скрипт
+      CHECK_INTERVAL: "0"
+      ACTIVE_HOURS_ENABLED: "false"
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
       TELEGRAM_ENABLED:    ${{ secrets.TELEGRAM_ENABLED }}
       TELEGRAM_TOKEN:      ${{ secrets.TELEGRAM_TOKEN }}
       TELEGRAM_CHAT_ID:    ${{ secrets.TELEGRAM_CHAT_ID }}
 
     steps:
-      - uses: actions/checkout@v4.2.2
-      
-      - uses: actions/setup-python@v5.6.0
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-${{ runner.os }}
 
       - name: Install dependencies
         run: |
