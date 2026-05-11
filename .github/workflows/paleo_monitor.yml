@@ -2,9 +2,9 @@ name: Paleo Festival Ticket Monitor
 
 on:
   schedule:
-    - cron: '0 5-19 * * *'   # щогодини з 07:00 до 21:00 (UTC+2 = UTC 07–18)
-  workflow_dispatch:           # кнопка ручного запуску
-
+    - cron: '0 5-19 * * *'
+  workflow_dispatch:
+  
 jobs:
   check-tickets:
     runs-on: ubuntu-latest
