@@ -27,7 +27,7 @@ URL = "https://bourse.paleo.ch/content?lang=en"
 
 # False = тестовий режим: сповіщати при появі квитків на БУДЬ-ЯКИЙ день.
 # True  = бойовий режим:  сповіщати лише якщо день збігається з DAY_KEYWORDS.
-DAY_FILTER_ENABLED = False
+DAY_FILTER_ENABLED = True
 
 # Ключові слова для фільтру дня (якщо DAY_FILTER_ENABLED = True)
 DAY_KEYWORDS = ["thursday", "jeudi", "donnerstag", "thu"]
@@ -40,7 +40,8 @@ SOLD_OUT_KEYWORDS = ["sold out", "épuisé", "ausverkauft", "not available"]
 
 # Інтервал перевірки (секунди). За замовчуванням — 3600 (1 година).
 # Встановіть 0 щоб запуститись один раз і вийти (для GitHub Actions / cron).
-CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", 3600))
+# CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", 3600))
+CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", 0))
 
 # ─── Активні години ──────────────────────────────────────────────────────────
 # Скрипт перевіряє сторінку лише в цьому діапазоні часу.
