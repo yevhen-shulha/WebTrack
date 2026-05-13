@@ -27,7 +27,7 @@ URL = "https://bourse.paleo.ch/content?lang=en"
 
 # False = тестовий режим: сповіщати при появі квитків на БУДЬ-ЯКИЙ день.
 # True  = бойовий режим:  сповіщати лише якщо день збігається з DAY_KEYWORDS.
-DAY_FILTER_ENABLED = True
+DAY_FILTER_ENABLED = False
 
 # Ключові слова для фільтру дня (якщо DAY_FILTER_ENABLED = True)
 DAY_KEYWORDS = ["thursday", "jeudi", "donnerstag", "thu"]
