@@ -2,8 +2,8 @@ name: Paleo Festival Ticket Monitor
 
 on:
   schedule:
-      # - cron: '0 6-18 * * *'    # щогодини 08:00–20:00
-      - cron: '45 6-19 * * *'  # кожні 45 хв вдень
+      - cron: '1 6-18 * * *'    # щогодини 08:00–20:00
+      # - cron: '45 6-19 * * *'  # кожні 45 хв вдень
   
   workflow_dispatch:           # кнопка ручного запуску
 
