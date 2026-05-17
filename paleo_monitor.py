@@ -38,10 +38,13 @@ AVAILABLE_KEYWORDS = ["add to cart", "buy", "ticket", "ajouter", "acheter", "kau
 # Ключові слова, що вказують на відсутність квитків
 SOLD_OUT_KEYWORDS = ["sold out", "épuisé", "ausverkauft", "not available"]
 
+# Надсилати статусне повідомлення в Telegram після КОЖНОЇ перевірки (для тестування).
+# Встановіть False коли переконаєтесь що все працює.
+NOTIFY_ALWAYS = os.getenv("NOTIFY_ALWAYS", "false").lower() == "true"
+
 # Інтервал перевірки (секунди). За замовчуванням — 3600 (1 година).
 # Встановіть 0 щоб запуститись один раз і вийти (для GitHub Actions / cron).
-# CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", 3600))
-CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", 0))
+CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", 3600))
 
 # ─── Активні години ──────────────────────────────────────────────────────────
 # Скрипт перевіряє сторінку лише в цьому діапазоні часу.
@@ -234,6 +237,15 @@ async def run_once() -> bool:
             await notify(snippets)
         else:
             log.info("😴 Квитків поки немає (%s).", mode)
+            if NOTIFY_ALWAYS:
+                now = datetime.now().strftime("%Y-%m-%d %H:%M")
+                await send_telegram(
+                    f"😴 <b>Paleo Monitor — перевірка о {now}</b>\n"
+                    f"Квитків поки немає. Наступна перевірка через {CHECK_INTERVAL // 60} хв."
+                    if CHECK_INTERVAL > 0 else
+                    f"😴 <b>Paleo Monitor — перевірка о {now}</b>\n"
+                    f"Квитків поки немає."
+                )
         return found
     except Exception as e:
         log.error("⚠️  Помилка під час перевірки: %s", e)
