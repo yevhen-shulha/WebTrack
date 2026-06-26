@@ -17,6 +17,7 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime, time as dtime
+import re
 
 import httpx
 from playwright.async_api import async_playwright
@@ -29,8 +30,14 @@ URL = "https://bourse.paleo.ch/content?lang=en"
 # True  = бойовий режим:  сповіщати лише якщо день збігається з DAY_KEYWORDS.
 DAY_FILTER_ENABLED = False
 
-# Ключові слова для фільтру дня (якщо DAY_FILTER_ENABLED = True)
-DAY_KEYWORDS = ["thursday", "jeudi", "donnerstag", "thu"]
+# Ключові слова для фільтру дня (якщо DAY_FILTER_ENABLED = True).
+# Сторінка завантажується з ?lang=en, тому дні завжди англійською.
+DAY_KEYWORDS = ["thursday"]
+
+# Регулярний вираз для заголовків дат на сторінці, напр. "Thursday 23 July 2026"
+DATE_TITLE_RE = re.compile(
+    r'\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b\s+\d{1,2}\s+\S+\s+\d{4}'
+)
 
 # Ключові слова, що вказують на наявність квитків
 AVAILABLE_KEYWORDS = ["add to cart", "buy", "ticket", "ajouter", "acheter", "kaufen"]
@@ -129,36 +136,73 @@ async def fetch_page_text() -> str:
     return text
 
 
+def _merge_duplicate_titles(matches):
+    """
+    Сайт іноді рендерить заголовок дати ДВІЧІ для картки без 'Sold out'
+    (прихований <h3> усередині <a> + видимий <p> заголовок).
+    Об'єднуємо послідовні однакові заголовки в одну "картку".
+    """
+    merged = []
+    i = 0
+    while i < len(matches):
+        j = i
+        while j + 1 < len(matches) and matches[j + 1].group(0) == matches[i].group(0):
+            j += 1
+        merged.append({
+            "day": matches[i].group(1),
+            "label": matches[i].group(0),
+            "start": matches[i].start(),
+            "end": matches[j].end(),
+        })
+        i = j + 1
+    return merged
+
+
 def check_tickets(text: str) -> tuple:
     """
-    Аналізує текст сторінки.
+    Аналізує текст сторінки, розбиваючи її на "картки" за заголовками дат
+    (напр. "Thursday 23 July 2026"), а не за довільним контекстним вікном рядків.
+
+    Для кожної картки:
+      - "backward" — текст МІЖ кінцем попередньої картки та початком заголовка
+        цієї картки. Індикатор 'Sold out' на сторінці рендериться САМЕ тут
+        (перед заголовком власної картки).
+      - "forward" — текст МІЖ кінцем заголовка цієї картки та початком
+        заголовка НАСТУПНОЇ картки. Кнопка 'Buy' рендериться саме тут.
+
+    Це коректно прив'язує кожен індикатор до "своєї" картки і уникає
+    помилки попередньої версії, де сусідня картка могла потрапити
+    у те саме контекстне вікно.
 
     DAY_FILTER_ENABLED=False → шукає будь-які доступні квитки (тест).
     DAY_FILTER_ENABLED=True  → шукає лише квитки для DAY_KEYWORDS.
 
     Повертає (True, [snippets]) або (False, []).
     """
-    text_lower = text.lower()
-    original_lines = text.splitlines()
-    lines = text_lower.splitlines()
+    lower = text.lower()
+    raw_matches = list(DATE_TITLE_RE.finditer(lower))
+    cards = _merge_duplicate_titles(raw_matches)
     found_snippets = []
 
-    for i, line in enumerate(lines):
-        if DAY_FILTER_ENABLED and not any(kw in line for kw in DAY_KEYWORDS):
-            continue
-        if not any(kw in line for kw in AVAILABLE_KEYWORDS):
+    for idx, card in enumerate(cards):
+        if DAY_FILTER_ENABLED and card["day"] not in DAY_KEYWORDS:
             continue
 
-        ctx_start = max(0, i - 5)
-        ctx_end = min(len(lines), i + 6)
-        context = "\n".join(lines[ctx_start:ctx_end])
+        prev_end = cards[idx - 1]["end"] if idx > 0 else 0
+        next_start = cards[idx + 1]["start"] if idx + 1 < len(cards) else len(lower)
 
-        if any(kw in context for kw in SOLD_OUT_KEYWORDS):
+        backward = lower[prev_end:card["start"]]
+        forward = lower[card["end"]:next_start]
+
+        # 'Sold out' для ЦІЄЇ картки рендериться ПЕРЕД її заголовком
+        if any(kw in backward for kw in SOLD_OUT_KEYWORDS):
             continue
 
-        snippet = "\n".join(original_lines[ctx_start:ctx_end]).strip()
-        if snippet and snippet not in found_snippets:
-            found_snippets.append(snippet)
+        # Кнопка купівлі рендериться ПІСЛЯ заголовка, до наступної картки
+        if any(kw in forward for kw in AVAILABLE_KEYWORDS):
+            snippet = text[card["start"]:card["end"] + len(forward)].strip()
+            if snippet and snippet not in found_snippets:
+                found_snippets.append(snippet)
 
     return bool(found_snippets), found_snippets
 
@@ -303,7 +347,5 @@ async def main():
                 wait_sec // 60, ACTIVE_HOUR_FROM
             )
             await asyncio.sleep(wait_sec)
-
-
 if __name__ == "__main__":
     asyncio.run(main())
