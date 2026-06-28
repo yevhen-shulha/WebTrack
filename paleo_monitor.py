@@ -321,8 +321,7 @@ async def run_once() -> bool:
                     f"😴 <b>Paleo Monitor — перевірка о {now}</b>\n"
                     f"Квитків поки немає. Наступна перевірка через {CHECK_INTERVAL // 60} хв."
                     if CHECK_INTERVAL > 0 else
-                    f"😴 <b>Paleo Monitor — перевірка о {now}</b>\n"
-                    f"Квитків поки немає."
+                    f"😴 <a href='{URL}'>Квитків поки немає.</a>"
                 )
         return found
     except Exception as e:
