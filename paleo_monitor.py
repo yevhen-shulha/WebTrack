@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Paleo Festival Ticket Monitor
-Перевіряє наявність квитків на bourse.paleo.ch
-та надсилає сповіщення на email або Telegram.
+Paleo Festival Ticket Monitor — ЧЕТВЕР (пряма сторінка товару)
+Перевіряє наявність квитків на ЧЕТВЕР через пряму сторінку перепродажу
+(а не через сторінку каталогу з усіма днями), що значно простіше і надійніше.
 
 Запуск:
     python paleo_monitor.py
@@ -16,50 +16,43 @@ import os
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from datetime import datetime, time as dtime
-import re
+from datetime import datetime
 
 import httpx
 from playwright.async_api import async_playwright
 
 # ─── Конфігурація ────────────────────────────────────────────────────────────
 
-URL = "https://bourse.paleo.ch/content?lang=en"
+# ID товару для ЧЕТВЕРГА (23 July 2026). Якщо productId зміниться — оновіть тут.
+PRODUCT_ID = os.getenv("PRODUCT_ID", "10229259587720")
 
-# False = тестовий режим: сповіщати при появі квитків на БУДЬ-ЯКИЙ день.
-# True  = бойовий режим:  сповіщати лише якщо день збігається з DAY_KEYWORDS.
-DAY_FILTER_ENABLED = False
+URL = f"https://bourse.paleo.ch/selection/resale/passItem?productId={PRODUCT_ID}"
 
-# Ключові слова для фільтру дня (якщо DAY_FILTER_ENABLED = True).
-# Сторінка завантажується з ?lang=en, тому дні завжди англійською.
-DAY_KEYWORDS = ["thursday"]
+# Фраза, яка зявляється на сторінці, коли квитків НЕМАЄ
+# (текст стає видимим лише в стані "sold out")
+SOLD_OUT_PHRASES = [
+    "there are currently no tickets being resold",
+    "no tickets being resold",
+]
 
-# Регулярний вираз для заголовків дат на сторінці, напр. "Thursday 23 July 2026"
-DATE_TITLE_RE = re.compile(
-    r'\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b\s+\d{1,2}\s+\S+\s+\d{4}'
-)
+# Ключові слова, що вказують на наявність квитків (кнопка купівлі)
+AVAILABLE_KEYWORDS = ["add to cart", "buy"]
 
-# Ключові слова, що вказують на наявність квитків
-AVAILABLE_KEYWORDS = ["add to cart", "buy", "ticket", "ajouter", "acheter", "kaufen"]
-
-# Ключові слова, що вказують на відсутність квитків
-SOLD_OUT_KEYWORDS = ["sold out", "épuisé", "ausverkauft", "not available"]
-
-# Надсилати статусне повідомлення в Telegram після КОЖНОЇ перевірки (для тестування).
-# Встановіть False коли переконаєтесь що все працює.
-NOTIFY_ALWAYS = os.getenv("NOTIFY_ALWAYS", "false").lower() == "true"
+# Фраза, яка ЗАВЖДИ присутня на сторінці незалежно від наявності квитків —
+# використовується для діагностики (чи сторінка завантажилась коректно)
+ALWAYS_PRESENT_PHRASE = "this pass is valid on"
 
 # Інтервал перевірки (секунди). За замовчуванням — 3600 (1 година).
 # Встановіть 0 щоб запуститись один раз і вийти (для GitHub Actions / cron).
 CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", 3600))
 
 # ─── Активні години ──────────────────────────────────────────────────────────
-# Скрипт перевіряє сторінку лише в цьому діапазоні часу.
-# None = без обмежень (перевіряти цілодобово).
-# Часовий пояс береться з системного налаштування сервера (TZ=Europe/Zurich).
 ACTIVE_HOURS_ENABLED = os.getenv("ACTIVE_HOURS_ENABLED", "true").lower() == "true"
-ACTIVE_HOUR_FROM     = int(os.getenv("ACTIVE_HOUR_FROM", 9))   # включно
-ACTIVE_HOUR_TO       = int(os.getenv("ACTIVE_HOUR_TO",  20))   # виключно (20 = до 19:59)
+ACTIVE_HOUR_FROM     = int(os.getenv("ACTIVE_HOUR_FROM", 9))
+ACTIVE_HOUR_TO       = int(os.getenv("ACTIVE_HOUR_TO",  20))
+
+# Надсилати статусне повідомлення в Telegram після КОЖНОЇ перевірки (для тестування).
+NOTIFY_ALWAYS = os.getenv("NOTIFY_ALWAYS", "false").lower() == "true"
 
 # ─── Налаштування email ───────────────────────────────────────────────────────
 EMAIL_ENABLED  = os.getenv("EMAIL_ENABLED", "false").lower() == "true"
@@ -86,47 +79,12 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 
-# ─── Активні години ──────────────────────────────────────────────────────────
-
-def is_active_hour() -> bool:
-    """Повертає True якщо поточний час потрапляє у активний діапазон."""
-    if not ACTIVE_HOURS_ENABLED:
-        return True
-    current_hour = datetime.now().hour
-    return ACTIVE_HOUR_FROM <= current_hour < ACTIVE_HOUR_TO
-
-
-def seconds_until_active() -> int:
-    """
-    Повертає кількість секунд до початку активного вікна.
-    Викликати лише якщо is_active_hour() == False.
-    """
-    now = datetime.now()
-    current_hour = now.hour
-    current_minute = now.minute
-    current_second = now.second
-
-    if current_hour < ACTIVE_HOUR_FROM:
-        # Ще не настав активний час сьогодні
-        delta_hours = ACTIVE_HOUR_FROM - current_hour - 1
-        delta_minutes = 59 - current_minute
-        delta_seconds = 60 - current_second
-    else:
-        # Активний час вже минув — чекаємо до завтра
-        delta_hours = (24 - current_hour + ACTIVE_HOUR_FROM) - 1
-        delta_minutes = 59 - current_minute
-        delta_seconds = 60 - current_second
-
-    return delta_hours * 3600 + delta_minutes * 60 + delta_seconds
-
-
 # ─── Функції ─────────────────────────────────────────────────────────────────
 
 async def fetch_page_text() -> str:
-    """Завантажує сторінку через Playwright (JS-рендеринг) і повертає текст."""
+    """Завантажує сторінку через Playwright (JS-рендеринг) і повертає видимий текст."""
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
-        # Реалістичний user-agent — деякі сайти блокують типовий headless Chromium
         page = await browser.new_page(
             user_agent=(
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -139,7 +97,7 @@ async def fetch_page_text() -> str:
             response = await page.goto(URL, wait_until="networkidle", timeout=60_000)
             await page.wait_for_timeout(3000)
 
-            # ─── Глибока діагностика ───────────────────────────────────
+            # ─── Діагностика ───────────────────────────────────────────
             status = response.status if response else None
             title = await page.title()
             raw_html = await page.content()
@@ -154,75 +112,34 @@ async def fetch_page_text() -> str:
     return text
 
 
-def _merge_duplicate_titles(matches):
+def check_availability(text: str) -> tuple:
     """
-    Сайт іноді рендерить заголовок дати ДВІЧІ для картки без 'Sold out'
-    (прихований <h3> усередині <a> + видимий <p> заголовок).
-    Об'єднуємо послідовні однакові заголовки в одну "картку".
-    """
-    merged = []
-    i = 0
-    while i < len(matches):
-        j = i
-        while j + 1 < len(matches) and matches[j + 1].group(0) == matches[i].group(0):
-            j += 1
-        merged.append({
-            "day": matches[i].group(1),
-            "label": matches[i].group(0),
-            "start": matches[i].start(),
-            "end": matches[j].end(),
-        })
-        i = j + 1
-    return merged
+    Перевіряє чи є квитки на сторінці конкретного товару (четвер).
 
+    Текст 'There are currently no tickets being resold' стає ВИДИМИМ
+    (а отже потрапляє у inner_text) лише коли квитків немає.
+    Кнопка 'Add to cart' / 'Buy' видима лише коли квитки Є.
 
-def check_tickets(text: str) -> tuple:
-    """
-    Аналізує текст сторінки, розбиваючи її на "картки" за заголовками дат
-    (напр. "Thursday 23 July 2026"), а не за довільним контекстним вікном рядків.
-
-    Для кожної картки:
-      - "backward" — текст МІЖ кінцем попередньої картки та початком заголовка
-        цієї картки. Індикатор 'Sold out' на сторінці рендериться САМЕ тут
-        (перед заголовком власної картки).
-      - "forward" — текст МІЖ кінцем заголовка цієї картки та початком
-        заголовка НАСТУПНОЇ картки. Кнопка 'Buy' рендериться саме тут.
-
-    Це коректно прив'язує кожен індикатор до "своєї" картки і уникає
-    помилки попередньої версії, де сусідня картка могла потрапити
-    у те саме контекстне вікно.
-
-    DAY_FILTER_ENABLED=False → шукає будь-які доступні квитки (тест).
-    DAY_FILTER_ENABLED=True  → шукає лише квитки для DAY_KEYWORDS.
-
-    Повертає (True, [snippets]) або (False, []).
+    Повертає (available: bool, snippet: str).
     """
     lower = text.lower()
-    raw_matches = list(DATE_TITLE_RE.finditer(lower))
-    cards = _merge_duplicate_titles(raw_matches)
-    found_snippets = []
 
-    for idx, card in enumerate(cards):
-        if DAY_FILTER_ENABLED and card["day"] not in DAY_KEYWORDS:
-            continue
+    sold_out = any(p in lower for p in SOLD_OUT_PHRASES)
+    available = any(kw in lower for kw in AVAILABLE_KEYWORDS)
 
-        prev_end = cards[idx - 1]["end"] if idx > 0 else 0
-        next_start = cards[idx + 1]["start"] if idx + 1 < len(cards) else len(lower)
+    if available and not sold_out:
+        return True, text.strip()
+    if sold_out and not available:
+        return False, ""
 
-        backward = lower[prev_end:card["start"]]
-        forward = lower[card["end"]:next_start]
-
-        # 'Sold out' для ЦІЄЇ картки рендериться ПЕРЕД її заголовком
-        if any(kw in backward for kw in SOLD_OUT_KEYWORDS):
-            continue
-
-        # Кнопка купівлі рендериться ПІСЛЯ заголовка, до наступної картки
-        if any(kw in forward for kw in AVAILABLE_KEYWORDS):
-            snippet = text[card["start"]:card["end"] + len(forward)].strip()
-            if snippet and snippet not in found_snippets:
-                found_snippets.append(snippet)
-
-    return bool(found_snippets), found_snippets
+    # Неоднозначний випадок — обидва або жодного індикатора не знайдено.
+    # Поводимось консервативно: вважаємо що квитків немає, але логуємо попередження.
+    log.warning(
+        "⚠️  Неоднозначний результат розбору сторінки (available=%s, sold_out=%s). "
+        "Можливо структура сторінки змінилась.",
+        available, sold_out
+    )
+    return False, ""
 
 
 def send_email(subject: str, body: str) -> None:
@@ -260,26 +177,22 @@ async def send_telegram(message: str) -> None:
         log.error("❌ Помилка Telegram: %s", e)
 
 
-async def notify(snippets: list) -> None:
+async def notify(snippet: str) -> None:
+    """Формує та надсилає сповіщення про знайдені квитки на четвер."""
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
-    mode_label = "ЧЕТВЕР" if DAY_FILTER_ENABLED else "будь-який день (тест)"
-    snippets_text = f"\n{'─'*40}\n".join(snippets)
 
-    subject = f"🎵 Paleo Festival — квитки з'явились! ({mode_label})"
+    subject = "🎵 Paleo Festival — квитки на ЧЕТВЕР з'явились!"
     body = (
-        f"[{now}] Виявлено квитки на Paleo Festival!\n"
-        f"Режим: {mode_label}\n\n"
+        f"[{now}] Виявлено квитки на ЧЕТВЕР на Paleo Festival!\n\n"
         f"Сторінка: {URL}\n\n"
-        f"Знайдені фрагменти:\n{snippets_text}\n\n"
+        f"Фрагмент сторінки:\n{'-'*40}\n{snippet[:1000]}\n{'-'*40}\n\n"
         "Поспішайте — квитки розходяться швидко!"
     )
     tg_message = (
-        f"🎵 <b>Paleo Festival — квитки!</b>\n"
-        f"<i>Режим: {mode_label}</i>\n\n"
-        f"👉 <a href='{URL}'>Перейти до квитків</a>\n"
-        f"{URL}\n\n"
-        f"<pre>{snippets[0][:600]}</pre>"
-        + (f"\n<i>...ще {len(snippets) - 1} фрагм.</i>" if len(snippets) > 1 else "")
+        f"🎵 <b>Paleo Festival — ЧЕТВЕР!</b>\n"
+        f"Квитки на четвер з'явились!\n\n"
+        f"👉 <a href='{URL}'>Купити квитки</a>\n\n"
+        f"<pre>{snippet[:500]}</pre>"
     )
 
     send_email(subject, body)
@@ -288,42 +201,36 @@ async def notify(snippets: list) -> None:
 
 async def run_once() -> bool:
     """Одна ітерація перевірки. Повертає True якщо знайдено квитки."""
-    mode = "лише четвер" if DAY_FILTER_ENABLED else "всі дні"
-    log.info("🔍 Перевірка [%s]: %s", mode, URL)
+    log.info("🔍 Перевірка сторінки ЧЕТВЕРГА (productId=%s): %s", PRODUCT_ID, URL)
     try:
         text = await fetch_page_text()
 
-        # ─── Діагностика ───────────────────────────────────────────────
-        # Перевіряємо чи Playwright бачить очікуваний контент сторінки.
-        # "Katy Perry" — артист суботнього дня, який майже завжди
-        # присутній на сторінці незалежно від наявності квитків.
+        # ─── Діагностика наявності очікуваного контенту ───────────────
         log.info("📄 Довжина отриманого тексту: %d символів", len(text))
-        if "Katy Perry" in text:
-            log.info("✅ Діагностика: текст 'Katy Perry' знайдено — сторінка завантажилась коректно.")
+        if ALWAYS_PRESENT_PHRASE in text.lower():
+            log.info("✅ Діагностика: сторінка завантажилась коректно (знайдено '%s').", ALWAYS_PRESENT_PHRASE)
         else:
-            log.warning("⚠️  Діагностика: текст 'Katy Perry' НЕ знайдено! "
-                        "Можливо сторінка завантажилась не повністю, заблокована, "
-                        "або показує інший контент. Перші 500 символів тексту:")
+            log.warning(
+                "⚠️  Діагностика: фраза '%s' НЕ знайдена! Сторінка могла не завантажитись "
+                "повністю, бути заблокованою, або змінити структуру. Перші 500 символів:",
+                ALWAYS_PRESENT_PHRASE
+            )
             log.warning(text[:500])
-        # ─────────────────────────────────────────────────────────────
+        # ───────────────────────────────────────────────────────────────
 
-        found, snippets = check_tickets(text)
-        if found:
-            log.info("🎉 ЗНАЙДЕНО квитки! (%d фрагментів)", len(snippets))
-            for idx, s in enumerate(snippets, 1):
-                log.info("  Фрагмент %d:\n%s", idx, s[:300])
-            await notify(snippets)
+        available, snippet = check_availability(text)
+        if available:
+            log.info("🎉 ЗНАЙДЕНО квитки на ЧЕТВЕР!")
+            log.info("Фрагмент:\n%s", snippet[:300])
+            await notify(snippet)
         else:
-            log.info("😴 Квитків поки немає (%s).", mode)
+            log.info("😴 Квитків на четвер поки немає.")
             if NOTIFY_ALWAYS:
-                now = datetime.now().strftime("%Y-%m-%d %H:%M")
                 await send_telegram(
-                    f"😴 <b>Paleo Monitor — перевірка о {now}</b>\n"
-                    f"Квитків поки немає. Наступна перевірка через {CHECK_INTERVAL // 60} хв."
-                    if CHECK_INTERVAL > 0 else
-                    f"😴 <a href='{URL}'>Квитків поки немає.</a>"
+                    f"😴 Квитків на четвер поки немає.\n"
+                    f"👉 <a href='{URL}'>Перейти до сторінки</a>"
                 )
-        return found
+        return available
     except Exception as e:
         log.error("⚠️  Помилка під час перевірки: %s", e)
         return False
@@ -331,55 +238,26 @@ async def run_once() -> bool:
 
 async def main():
     log.info("=" * 55)
-    log.info("Paleo Monitor запущено")
-    log.info(
-        "Режим: %s",
-        "лише четвер (DAY_FILTER_ENABLED=True)" if DAY_FILTER_ENABLED
-        else "ВСІ ДНІ — тестовий (DAY_FILTER_ENABLED=False)"
-    )
+    log.info("Paleo Monitor (ЧЕТВЕР) запущено")
+    log.info("Сторінка: %s", URL)
     log.info("Інтервал: %d сек (%d хв)", CHECK_INTERVAL, CHECK_INTERVAL // 60)
     if ACTIVE_HOURS_ENABLED:
         log.info("Активні години: %02d:00 – %02d:00", ACTIVE_HOUR_FROM, ACTIVE_HOUR_TO)
     else:
         log.info("Активні години: цілодобово (ACTIVE_HOURS_ENABLED=false)")
-    log.info("Email: %s | Telegram: %s", EMAIL_ENABLED, TELEGRAM_ENABLED)
+    log.info("Email: %s | Telegram: %s | NOTIFY_ALWAYS: %s", EMAIL_ENABLED, TELEGRAM_ENABLED, NOTIFY_ALWAYS)
     log.info("=" * 55)
 
-    if not DAY_FILTER_ENABLED:
-        log.info("ℹ️  Тест: сповіщення надходять при квитках на БУДЬ-ЯКИЙ день.")
-        log.info("ℹ️  Коли переконаєтесь — встановіть DAY_FILTER_ENABLED = True.")
-
-    # Режим «один запуск» (для GitHub Actions / cron)
+    # Режим «запустився → перевірив → вийшов» (для GitHub Actions / cron)
     if CHECK_INTERVAL == 0:
-        if is_active_hour():
-            await run_once()
-        else:
-            log.info(
-                "🌙 Поза активними годинами (%02d:00–%02d:00), пропускаємо.",
-                ACTIVE_HOUR_FROM, ACTIVE_HOUR_TO
-            )
+        await run_once()
         return
 
     # Режим безперервного моніторингу
     while True:
-        if is_active_hour():
-            await run_once()
-            log.info("⏳ Наступна перевірка через %d хв...", CHECK_INTERVAL // 60)
-            await asyncio.sleep(CHECK_INTERVAL)
-        else:
-            wait_sec = seconds_until_active()
-            wake_at = datetime.now().replace(
-                hour=ACTIVE_HOUR_FROM if datetime.now().hour >= ACTIVE_HOUR_TO
-                else ACTIVE_HOUR_FROM,
-                minute=0, second=0, microsecond=0
-            )
-            log.info(
-                "🌙 Поза активними годинами (%02d:00–%02d:00). "
-                "Сплю %d хв до %02d:00...",
-                ACTIVE_HOUR_FROM, ACTIVE_HOUR_TO,
-                wait_sec // 60, ACTIVE_HOUR_FROM
-            )
-            await asyncio.sleep(wait_sec)
+        await run_once()
+        log.info("⏳ Наступна перевірка через %d хв...", CHECK_INTERVAL // 60)
+        await asyncio.sleep(CHECK_INTERVAL)
 
 
 if __name__ == "__main__":
