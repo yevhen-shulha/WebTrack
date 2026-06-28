@@ -126,10 +126,28 @@ async def fetch_page_text() -> str:
     """Завантажує сторінку через Playwright (JS-рендеринг) і повертає текст."""
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
-        page = await browser.new_page()
+        # Реалістичний user-agent — деякі сайти блокують типовий headless Chromium
+        page = await browser.new_page(
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/124.0.0.0 Safari/537.36"
+            ),
+            viewport={"width": 1366, "height": 900},
+        )
         try:
-            await page.goto(URL, wait_until="networkidle", timeout=60_000)
+            response = await page.goto(URL, wait_until="networkidle", timeout=60_000)
             await page.wait_for_timeout(3000)
+
+            # ─── Глибока діагностика ───────────────────────────────────
+            status = response.status if response else None
+            title = await page.title()
+            raw_html = await page.content()
+            log.info("🌐 HTTP статус відповіді: %s", status)
+            log.info("📑 Заголовок сторінки (title): %r", title)
+            log.info("📦 Довжина сирого HTML: %d символів", len(raw_html))
+            # ─────────────────────────────────────────────────────────
+
             text = await page.inner_text("body")
         finally:
             await browser.close()
@@ -363,6 +381,7 @@ async def main():
                 wait_sec // 60, ACTIVE_HOUR_FROM
             )
             await asyncio.sleep(wait_sec)
+
 
 if __name__ == "__main__":
     asyncio.run(main())
