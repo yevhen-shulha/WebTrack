@@ -258,7 +258,8 @@ async def notify(snippets: list) -> None:
     tg_message = (
         f"🎵 <b>Paleo Festival — квитки!</b>\n"
         f"<i>Режим: {mode_label}</i>\n\n"
-        f"👉 <a href='{URL}'>Перейти до квитків</a>\n\n"
+        f"👉 <a href='{URL}'>Перейти до квитків</a>\n"
+        f"{URL}\n\n"
         f"<pre>{snippets[0][:600]}</pre>"
         + (f"\n<i>...ще {len(snippets) - 1} фрагм.</i>" if len(snippets) > 1 else "")
     )
@@ -273,6 +274,21 @@ async def run_once() -> bool:
     log.info("🔍 Перевірка [%s]: %s", mode, URL)
     try:
         text = await fetch_page_text()
+
+        # ─── Діагностика ───────────────────────────────────────────────
+        # Перевіряємо чи Playwright бачить очікуваний контент сторінки.
+        # "Katy Perry" — артист суботнього дня, який майже завжди
+        # присутній на сторінці незалежно від наявності квитків.
+        log.info("📄 Довжина отриманого тексту: %d символів", len(text))
+        if "Katy Perry" in text:
+            log.info("✅ Діагностика: текст 'Katy Perry' знайдено — сторінка завантажилась коректно.")
+        else:
+            log.warning("⚠️  Діагностика: текст 'Katy Perry' НЕ знайдено! "
+                        "Можливо сторінка завантажилась не повністю, заблокована, "
+                        "або показує інший контент. Перші 500 символів тексту:")
+            log.warning(text[:500])
+        # ─────────────────────────────────────────────────────────────
+
         found, snippets = check_tickets(text)
         if found:
             log.info("🎉 ЗНАЙДЕНО квитки! (%d фрагментів)", len(snippets))
@@ -287,7 +303,8 @@ async def run_once() -> bool:
                     f"😴 <b>Paleo Monitor — перевірка о {now}</b>\n"
                     f"Квитків поки немає. Наступна перевірка через {CHECK_INTERVAL // 60} хв."
                     if CHECK_INTERVAL > 0 else
-                    f"😴 Квитків поки немає."
+                    f"😴 <b>Paleo Monitor — перевірка о {now}</b>\n"
+                    f"Квитків поки немає."
                 )
         return found
     except Exception as e:
@@ -346,5 +363,6 @@ async def main():
                 wait_sec // 60, ACTIVE_HOUR_FROM
             )
             await asyncio.sleep(wait_sec)
+
 if __name__ == "__main__":
     asyncio.run(main())
